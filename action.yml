@@ -1,0 +1,158 @@
+name: "PR Summarizing using AI"
+description: "Summarizes the code changes in a PR using AI"
+author: "Behrouz Rad"
+inputs:
+  llm-model:
+    description: "Name of the LLM model to use for code review."
+    required: true
+  prompt-file:
+    description: "The file which contains prompt."
+    required: true
+  models-file:
+    description: "The file which contains AI models."
+    required: true
+  version-file:
+    description: "The reference file to cache Ollama."
+    required: true
+  context-window:
+    description: "The number of tokens an AI model can process at once, affecting its ability to handle longer inputs and context."
+    default: "4096"
+    required: false
+  upload-changes:
+    description: "Indicates whether to upload the generated changes as an artifact for future reference."
+    default: "false"
+    required: false
+  fail-on-error:
+    description: "If set to true, the action will terminate if an error occurs during operation."
+    default: "true"
+    required: false
+  token:
+    description: "Token for the repository, required to comment on the pull request."
+    default: ${{ github.token }}
+    required: false
+branding:
+  icon: "check-square"
+  color: "green"
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ (github.event.pull_request.head.ref) }}
+
+    - name: Display Ollama version file contents
+      shell: bash
+      run: |
+        echo "Ollama version file content:"
+        cat  "${{ inputs.version-file }}"
+        echo ""
+        echo "Ollama version hash:"
+        echo "${{ hashFiles(inputs.version-file) }}"
+
+    - name: Cache Ollama
+      id: cache-ollama
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/ollama
+        key: ${{ runner.os }}-ollama-${{ hashFiles(inputs.version-file) }}
+
+    - name: Install Ollama (not cached)
+      shell: bash
+      if: steps.cache-ollama.outputs.cache-hit != 'true'
+      run: |
+        echo "Installing Ollama..."
+        curl -fsSL https://ollama.com/install.sh | sudo -E sh
+
+    - name: Use Cached Ollama
+      shell: bash
+      if: steps.cache-ollama.outputs.cache-hit == 'true'
+      run: |
+        echo "Ollama is already in the cache. No need to reinstall."
+        ollama --version
+
+    - name: Start Ollama
+      shell: bash
+      run: |
+        nohup ollama serve &
+        sleep 5
+        curl -i http://localhost:11434
+
+    - name: Cache Ollama Models
+      id: cache-models
+      uses: actions/cache@v4
+      with:
+        path: ~/.ollama/models
+        key: ${{ runner.os }}-ollama-models-${{ hashFiles(inputs.models-file) }}
+
+    - name: Pull Ollama models (not cached)
+      shell: bash
+      if: steps.cache-models.outputs.cache-hit != 'true'
+      run: |
+        echo "Fetching AI models..."
+        while IFS= read -r model || [[ -n "$model" ]]; do
+          if [ ! -f ~/.ollama/models/${model}.bin ]; then
+            echo "Pulling model: $model"
+            ollama pull $model
+          else
+            echo "Model already cached: $model"
+          fi
+        done < '${{ inputs.models-file }}'
+        echo "Installed models:"
+        ollama list
+
+    - name: Extract current branch name
+      id: extract_branch
+      shell: bash
+      run: |
+        echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+
+    - name: Show current branch name
+      shell: bash
+      run: |
+        echo "${{ steps.extract_branch.outputs.branch }}"
+
+    - name: Get Diffs
+      id: get-changes
+      shell: pwsh
+      run: |
+        echo "$(git diff origin/${{ github.event.repository.default_branch }}..${{ steps.extract_branch.outputs.branch }})" | Out-File -FilePath changes.diff -Encoding utf8
+
+    - name: Review modified files
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        escaped_content=$(jq -Rs . < changes.diff)
+        prompt=$(cat "${{ inputs.prompt-file }}")
+
+        escaped_content=$(jq -R <<<"$prompt$(jq -r <<<"$escaped_content")" | jq -Rs .)
+
+        echo "Creating result. Please wait..."
+
+        response=$(curl -s -w "%{response_code}" -X POST http://127.0.0.1:11434/api/generate \
+          -H "Content-Type: application/json" \
+          -d "{\"model\":\"${{ inputs.llm-model }}\",\"system\":\"You are the best code reviewer in the world with extensive knowledge of software development.\",\"prompt\":$escaped_content,\"stream\": false,\"options\":{\"num_ctx\":${{ inputs.context-window }}} }")
+
+        http_code=${response: -3}
+        content=$(echo ${response} | head -c-4)
+
+        if [ $http_code -ne 200 ]; then
+            echo "The operation failed!"
+            echo "$response"
+            if [[ "${{ inputs.fail-on-error }}" == "true" ]]; then
+                exit 1
+            fi
+        else
+        	echo "The operation succeeded!"
+        	message=$(echo $content | jq -r '.response')
+          gh pr comment ${{ github.event.pull_request.number }} --body "$message"
+        fi
+
+    - name: Upload changes as an artifact
+      if: ${{ inputs.upload-changes == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: changes
+        path: changes.diff
