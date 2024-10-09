@@ -52,7 +52,8 @@ At present, the action excels in summarizing changes, offering a broad overview 
 | `prompt-file` | The file containing the AI prompt for the review process. | true    | N/A |
 | `models-file` | The file listing AI models to be pulled and cached. | true    | N/A |
 | `version-file` | The file used as a reference for caching the Ollama tool. | true    | N/A |
-| `context-window` | The number of tokens an AI model can process at once, affecting its ability to handle longer inputs and context. | false    | 4096 |
+| `context-window` | The number of tokens an AI model can process at once, affecting its ability to handle longer inputs and context. | false | 4096 |
+| `context-lines` | Sets the number of context lines to include around changes in `git diff`. A higher value provides more surrounding code for better AI analysis of the PR. | false    | 10 |
 | `upload-changes` | Whether to upload the diff file as an artifact. | false    | false |
 | `fail-on-error` | If set to `true`, the action will terminate if an error occurs during operation. | false    | true |
 | `token` | Token for the repository, required to comment on the pull request. | false    | `github.token` |

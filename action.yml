@@ -18,6 +18,10 @@ inputs:
     description: "The number of tokens an AI model can process at once, affecting its ability to handle longer inputs and context."
     default: "4096"
     required: false
+  context-lines:
+    description: "Sets the number of context lines to include around changes in git diff. A higher value provides more surrounding code for better AI analysis of the PR."
+    default: "10"
+    required: false
   upload-changes:
     description: "Indicates whether to upload the generated changes as an artifact for future reference."
     default: "false"
@@ -117,7 +121,7 @@ runs:
       id: get-changes
       shell: pwsh
       run: |
-        echo "$(git diff origin/${{ github.event.repository.default_branch }}..${{ steps.extract_branch.outputs.branch }})" | Out-File -FilePath changes.diff -Encoding utf8
+        echo "$(git diff origin/${{ github.event.repository.default_branch }}..${{ steps.extract_branch.outputs.branch }} --unified=${{ inputs.context-lines }})" | Out-File -FilePath changes.diff -Encoding utf8
 
     - name: Review modified files
       shell: bash
